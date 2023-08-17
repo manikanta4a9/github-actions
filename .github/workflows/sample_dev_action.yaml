@@ -1,0 +1,80 @@
+name: Deploy dev branch
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x]
+    steps:
+    - uses: actions/checkout@v3
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ matrix.node-version }}
+    
+    - name: configure aws credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        role-to-assume: <arn>
+        role-session-name: <session name (our wish)>
+        aws-region: "eu-central-1"
+    
+    - run: |
+        npm install -g serverless@2.72.3
+        npm install -g serverless-dotenv-plugin
+
+    - run: npm ci
+
+    - name: linting stage
+      run: npm run lint
+
+    - name: unit tests
+      run: npm run test:unit
+
+    - run: npm install -g sonarqube-scanner
+    
+    - name: sonar-scanner
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # add SONAR_TOKEN in the secret of the repository
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      run: sonar-scanner
+
+    - name: Archive code coverage results
+      uses: actions/upload-artifact@v3
+      with:
+        name: code-coverage-report
+        path: output/test/code-coverage.html
+        retention-days: 5
+
+    - name: sonar quality gate
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GIT_URL: "https://api.github.com"
+        GIT_TOKEN: ${{ secrets.GIT_TOKEN }} 
+        SONAR_URL: ${{ secrets.SONAR_URL }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
+      run: |
+        npm install -g sonar-quality-gate
+        quality-gate -p=github -D sonar.login="<token>" --sonar.url="<sonar url>" --sonar.token="<sonar token>" --sonar.project_key="<sonar token>" --git.url="https://gitlab.com" --git.token="xxx" --git.project_id=123 --git.merge_id=345
+
+    - name: serverless deploy
+      working-directory: <if code in another directory>
+      env:
+        AWS_REGION: "eu-central-1"
+      run: |
+        export AWS_SDK_LOAD_CONFIG=1
+        serverless deploy --region $AWS_REGION --stage dev
+        
+    - name: integration tests
+      run: |
+        npm run install
+        npm run mocha
